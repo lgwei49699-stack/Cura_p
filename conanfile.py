@@ -35,7 +35,7 @@ class CuraConan(ConanFile):
     generators = "VirtualPythonEnv"
     tool_requires = "gettext/0.22.5"
 
-    python_requires = "translationextractor/[>=2.2.0]"
+    # python_requires = "translationextractor/[>=2.2.0]"  # 注释掉：只在开发时需要，打包时不需要
 
     options = {
         "enterprise": [True, False],
@@ -644,11 +644,16 @@ class CuraConan(ConanFile):
             copy(self, "*", cura_private_data.resdirs[0], str(self._share_dir.joinpath("cura")))
 
         if self.options.i18n_extract:
-            vb = VirtualBuildEnv(self)
-            vb.generate()
+            # 翻译提取功能需要 translationextractor python_requires
+            # 如果需要此功能，请取消注释 conanfile.py 第 38 行的 python_requires
+            try:
+                vb = VirtualBuildEnv(self)
+                vb.generate()
 
-            pot = self.python_requires["translationextractor"].module.ExtractTranslations(self)
-            pot.generate()
+                pot = self.python_requires["translationextractor"].module.ExtractTranslations(self)
+                pot.generate()
+            except KeyError:
+                self.output.warning("translationextractor not available, skipping i18n extraction")
 
     def build(self):
         for po_file in Path(self.source_folder, "resources", "i18n").glob("**/*.po"):

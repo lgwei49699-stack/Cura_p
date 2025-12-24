@@ -1,0 +1,123 @@
+name: Build Windows Package
+
+on:
+  # 手动触发
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment (qa/production)'
+        required: false
+        default: 'production'
+      create_installer:
+        description: 'Create installer (true/false)'
+        required: false
+        default: 'true'
+  
+  # 或者推送到特定分支时触发
+  # push:
+  #   branches: [ main, release/* ]
+
+jobs:
+  build-windows-x64:
+    runs-on: windows-latest  # 使用真实的 x64 Windows 环境
+    
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+    
+    - name: 设置 Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+    
+    - name: 显示系统信息
+      run: |
+        echo "OS: $env:OS"
+        echo "Architecture: $env:PROCESSOR_ARCHITECTURE"
+        python --version
+        pip --version
+    
+    - name: 安装 Conan
+      run: |
+        pip install conan>=2.7.0
+        conan --version
+        conan profile detect --force
+    
+    - name: 安装构建依赖
+      run: |
+        pip install pyinstaller==6.11.1 pyinstaller-hooks-contrib
+        pip install pycryptodome esdk-obs-python pyyaml jinja2 semver
+    
+    - name: 配置环境变量
+      run: |
+        echo "CURA_ENV=${{ github.event.inputs.environment || 'production' }}" >> $env:GITHUB_ENV
+    
+    - name: Conan Deploy
+      run: |
+        conan install . --deployer=full_deploy --deployer-folder=deploy --build=missing -c tools.system.package_manager:mode=install
+      timeout-minutes: 90
+    
+    - name: 激活虚拟环境并运行 PyInstaller
+      run: |
+        cd deploy
+        & ..\build\build\generators\virtual_python_env.bat
+        pyinstaller UltiMaker-Cura.spec -y
+      timeout-minutes: 30
+    
+    - name: 验证构建产物
+      run: |
+        if (Test-Path "deploy\dist\UltiMaker-Cura\UltiMaker-Cura.exe") {
+          Write-Host "✓ 可执行文件构建成功"
+          Get-Item "deploy\dist\UltiMaker-Cura\UltiMaker-Cura.exe" | Format-List
+        } else {
+          Write-Error "✗ 可执行文件未生成"
+          exit 1
+        }
+    
+    - name: 安装 NSIS（用于创建安装程序）
+      if: github.event.inputs.create_installer == 'true' || github.event.inputs.create_installer == ''
+      run: |
+        choco install nsis -y
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+    
+    - name: 创建 NSIS 安装程序
+      if: github.event.inputs.create_installer == 'true' || github.event.inputs.create_installer == ''
+      run: |
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+        python packaging\NSIS\create_windows_installer.py --source_path . --dist_path deploy\dist --filename "UltiMaker-Cura-5.11.0-Windows-X64.exe" --version "5.11.0"
+    
+    - name: 上传应用程序（无安装程序）
+      uses: actions/upload-artifact@v4
+      with:
+        name: cura-windows-x64-app
+        path: deploy/dist/UltiMaker-Cura/
+        retention-days: 7
+    
+    - name: 上传安装程序
+      if: github.event.inputs.create_installer == 'true' || github.event.inputs.create_installer == ''
+      uses: actions/upload-artifact@v4
+      with:
+        name: cura-windows-x64-installer
+        path: deploy/dist/*.exe
+        retention-days: 30
+    
+    - name: 构建摘要
+      run: |
+        echo "## 构建完成 ✅" >> $env:GITHUB_STEP_SUMMARY
+        echo "" >> $env:GITHUB_STEP_SUMMARY
+        echo "### 构建信息" >> $env:GITHUB_STEP_SUMMARY
+        echo "- **平台**: Windows x64" >> $env:GITHUB_STEP_SUMMARY
+        echo "- **架构**: x86_64" >> $env:GITHUB_STEP_SUMMARY
+        echo "- **环境**: ${{ github.event.inputs.environment || 'production' }}" >> $env:GITHUB_STEP_SUMMARY
+        echo "- **Python**: $(python --version)" >> $env:GITHUB_STEP_SUMMARY
+        echo "" >> $env:GITHUB_STEP_SUMMARY
+        echo "### 输出文件" >> $env:GITHUB_STEP_SUMMARY
+        echo "- 应用程序: \`deploy/dist/UltiMaker-Cura/UltiMaker-Cura.exe\`" >> $env:GITHUB_STEP_SUMMARY
+        if (Test-Path "deploy\dist\UltiMaker-Cura-5.11.0-Windows-X64.exe") {
+          echo "- 安装程序: \`deploy/dist/UltiMaker-Cura-5.11.0-Windows-X64.exe\`" >> $env:GITHUB_STEP_SUMMARY
+        }
+        echo "" >> $env:GITHUB_STEP_SUMMARY
+        echo "### 下载" >> $env:GITHUB_STEP_SUMMARY
+        echo "在 Actions 页面的 Artifacts 中下载构建产物" >> $env:GITHUB_STEP_SUMMARY
+

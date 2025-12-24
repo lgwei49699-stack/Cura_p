@@ -1,0 +1,128 @@
+name: Build macOS Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      architecture:
+        description: 'Architecture (arm64/x64)'
+        required: false
+        default: 'arm64'
+      environment:
+        description: 'Environment (qa/production)'
+        required: false
+        default: 'production'
+      create_dmg:
+        description: 'Create DMG (true/false)'
+        required: false
+        default: 'true'
+
+jobs:
+  build-macos:
+    runs-on: ${{ github.event.inputs.architecture == 'arm64' && 'macos-14' || 'macos-13' }}
+    
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+    
+    - name: 设置 Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+    
+    - name: 显示系统信息
+      run: |
+        echo "OS: $(uname -s)"
+        echo "Architecture: $(uname -m)"
+        python3 --version
+        pip3 --version
+    
+    - name: 安装系统依赖
+      run: |
+        brew install create-dmg
+    
+    - name: 安装 Conan
+      run: |
+        pip3 install conan>=2.7.0
+        conan --version
+        conan profile detect --force
+    
+    - name: 安装构建依赖
+      run: |
+        pip3 install pyinstaller==6.11.1 pyinstaller-hooks-contrib
+        pip3 install pycryptodome esdk-obs-python pyyaml jinja2 semver
+    
+    - name: 配置环境变量
+      run: |
+        echo "CURA_ENV=${{ github.event.inputs.environment || 'production' }}" >> $GITHUB_ENV
+    
+    - name: Conan Deploy
+      run: |
+        conan install . --deployer=full_deploy --deployer-folder=deploy --build=missing -c tools.system.package_manager:mode=install
+      timeout-minutes: 90
+    
+    - name: 激活虚拟环境并运行 PyInstaller
+      run: |
+        source build/build/generators/virtual_python_env.sh
+        cd deploy
+        pyinstaller UltiMaker-Cura.spec -y
+      timeout-minutes: 30
+    
+    - name: 验证构建产物
+      run: |
+        if [ -f "deploy/dist/UltiMaker-Cura.app/Contents/MacOS/UltiMaker-Cura" ]; then
+          echo "✓ 应用程序构建成功"
+          ls -lh deploy/dist/UltiMaker-Cura.app/Contents/MacOS/
+        else
+          echo "✗ 应用程序未生成"
+          exit 1
+        fi
+    
+    - name: 创建 DMG
+      if: github.event.inputs.create_dmg == 'true' || github.event.inputs.create_dmg == ''
+      run: |
+        ARCH="${{ github.event.inputs.architecture || 'arm64' }}"
+        ARCH_UPPER=$(echo "$ARCH" | tr '[:lower:]' '[:upper:]')
+        python3 packaging/MacOS/build_macos.py \
+          --source_path . \
+          --dist_path deploy/dist \
+          --cura_conan_version "5.11.0" \
+          --filename "UltiMaker-Cura-5.11.0-macOS-${ARCH_UPPER}" \
+          --app_name "UltiMaker-Cura" \
+          --build_dmg
+    
+    - name: 上传应用程序
+      uses: actions/upload-artifact@v4
+      with:
+        name: cura-macos-${{ github.event.inputs.architecture || 'arm64' }}-app
+        path: deploy/dist/UltiMaker-Cura.app
+        retention-days: 7
+    
+    - name: 上传 DMG
+      if: github.event.inputs.create_dmg == 'true' || github.event.inputs.create_dmg == ''
+      uses: actions/upload-artifact@v4
+      with:
+        name: cura-macos-${{ github.event.inputs.architecture || 'arm64' }}-dmg
+        path: deploy/dist/*.dmg
+        retention-days: 30
+    
+    - name: 构建摘要
+      run: |
+        ARCH="${{ github.event.inputs.architecture || 'arm64' }}"
+        echo "## 构建完成 ✅" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 构建信息" >> $GITHUB_STEP_SUMMARY
+        echo "- **平台**: macOS ${ARCH}" >> $GITHUB_STEP_SUMMARY
+        echo "- **架构**: $(uname -m)" >> $GITHUB_STEP_SUMMARY
+        echo "- **环境**: ${{ github.event.inputs.environment || 'production' }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Python**: $(python3 --version)" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 输出文件" >> $GITHUB_STEP_SUMMARY
+        echo "- 应用程序: \`deploy/dist/UltiMaker-Cura.app\`" >> $GITHUB_STEP_SUMMARY
+        if [ -f "deploy/dist/UltiMaker-Cura-5.11.0-macOS-"*".dmg" ]; then
+          echo "- DMG: \`deploy/dist/UltiMaker-Cura-5.11.0-macOS-${ARCH^^}.dmg\`" >> $GITHUB_STEP_SUMMARY
+        fi
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 下载" >> $GITHUB_STEP_SUMMARY
+        echo "在 Actions 页面的 Artifacts 中下载构建产物" >> $GITHUB_STEP_SUMMARY
+

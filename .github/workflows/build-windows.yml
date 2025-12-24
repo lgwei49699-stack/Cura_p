@@ -43,6 +43,11 @@ jobs:
         pip install conan>=2.7.0
         conan --version
         conan profile detect --force
+        
+    - name: 配置 Conan 远程仓库
+      run: |
+        conan remote add cura https://cura.jfrog.io/artifactory/api/conan/cura-conan2-dev
+        conan remote list
     
     - name: 安装构建依赖
       run: |
